@@ -1,0 +1,165 @@
+---
+title: "MKTG 366 Project - LambdaMART"
+output: html_document
+toc: true
+---
+
+
+```{r}
+setwd("~/Google Drive/School/MKTG 366 Project/")
+library(data.table)
+library(caret)
+library(dplyr)
+library(gbm)
+```
+
+
+## Data preprocessing
+
+```{r}
+# load data
+exped = data.table::fread("train.csv")
+```
+
+The US is the largest source of queries in this dataset, so to simplify the analysis, we will use only US data, which has prop\_country\_id = 219. 
+
+```{r}
+# filter only queries with property country id = 219, (USA)
+data_us = exped %>% filter(prop_country_id == 219)
+```
+
+The following shows the glimps of the data and helps us decide what pre-processing operations to take.
+
+```{r}
+str(data_us)
+```
+
+We remove the following variables:
+
+- visitor\_hist_staring, visitor\_hist\_adr\_usd, srch\_query\_affinity\_score, gross\_bookings\_usd, since for the majority of observations they are NULL
+- all comp\_ variables, since they are mostly NULL and it has been observed that these variables do not have significant impact on booking
+- prop\_country\_id, since it's 219 for all examples
+- srch\_destination\_id, since it has too many levels for gbm to handle (max 1024 levels)
+
+```{r}
+data_us = data_us %>% select(click_bool, random_bool, booking_bool, prop_brand_bool,
+                             srch_id, site_id, visitor_location_country_id, #prop_id,
+                             prop_starrating, prop_review_score, prop_location_score1, prop_location_score2,
+                             prop_log_historical_price, position, price_usd,
+                             srch_length_of_stay, srch_booking_window, orig_destination_distance,
+                             srch_adults_count, srch_children_count, srch_room_count)
+```
+
+Of the variables selected, we convert:
+
+- all \_bool variables and all \_id (except srch\_id) variables to "factor"
+- prop\_review_score, prop\_location\_score2, orig\_destination_distance from "chr" to "numeric"
+
+```{r}
+# convert variables that were coerced to "character" to type "numeric"
+numeric_names = c("prop_review_score", "prop_location_score2", "orig_destination_distance")
+setDT(data_us)[, (numeric_names) := lapply(.SD, as.numeric), .SDcols = numeric_names]
+
+# convert these variables to type "factor"
+bool_names = c("click_bool", "prop_brand_bool", "booking_bool", "random_bool")
+id_names = c("site_id", "visitor_location_country_id")
+setDT(data_us)[, (bool_names) := lapply(.SD, as.factor), .SDcols = bool_names]
+setDT(data_us)[, (id_names) := lapply(.SD, as.factor), .SDcols = id_names]
+```
+
+We create the response variable as a composition of variables **booking\_bool** and **click\_bool**. A booking is scored highest at 5, a click is scored at 1, and no action is scored 0. This captures the value of the corresponding action.
+
+```{r}
+data_us$response = ifelse(data_us$booking_bool == 1, 5, ifelse(data_us$click_bool == 1, 1, 0))
+data_us = data_us %>% select(c(-booking_bool, -click_bool))
+```
+
+
+Proportion of observations that are NA, for each variable:
+```{r}
+na.proportion = function(column){
+  return(sum(is.na(column)) / length(column))
+}
+
+t = lapply(data_us, na.proportion)
+t
+```
+So we are fine.
+
+
+Since this is a demonstration we will use only a random sample of size 1/100 of the US data. This random sample is selected using a random sample of srch\_id.
+
+```{r}
+# get list of unique search id in train and take their count
+unique_srch_id = unique(data_us$srch_id)
+num_unique_srch_id = length(unique_srch_id)
+
+# generate a 1/100 sample of unique_srch_id
+sample_id = sample(unique_srch_id, round(num_unique_srch_id/100))
+
+# split these ids into train group and test group
+train_id = sample(sample_id, round(length(sample_id)/10*8))
+test_id = setdiff(sample_id, train_id)
+
+# use these ids to select rows from train
+train_sample = data_us %>% filter(srch_id %in% train_id)
+test_sample = data_us %>% filter(srch_id %in% test_id)
+```
+
+
+## Modeling
+
+In the following we run a tree ensemble modeling using LambdaMART algorithm to learn to rank hotel results in response to a query.
+
+We partition the training data according to whether the results were randomized or sorted by Expedia and train a separate model for each partition. This allows us to distinghuish effect of actual position ranking on booking or clicking decision.
+
+```{r}
+train_not_random = train_sample %>% filter(random_bool == 1) %>% select(-random_bool)
+train_random = train_sample %>% filter(random_bool == 0) %>% select(-random_bool)
+
+lambdamart_not_random = gbm(response ~ .,
+              data = train_not_random,
+              distribution = list(name = 'pairwise', metric = "ndcg", group = 'srch_id'),
+              n.trees = 1000,
+              interaction.depth = 3,
+              shrinkage = 0.005,
+              train.fraction = 0.5,
+              verbose = FALSE)
+
+
+
+lambdamart_random = gbm(response ~ .,
+              data = train_random,
+              distribution = list(name = 'pairwise', metric = "ndcg", group = 'srch_id'),
+              n.trees = 1000,
+              interaction.depth = 3,
+              shrinkage = 0.005,
+              train.fraction = 0.5,
+              verbose = FALSE)
+
+summary(lambdamart_not_random)
+summary(lambdamart_random)
+
+summary(
+  lambdamart_not_random,
+  n.trees = gbm.perf(lambdamart_not_random),
+  main = 'pairwise (ndcg)'
+  )
+
+summary(lambdamart_random,
+  n.trees = gbm.perf(lambdamart_random),
+  main = 'pairwise (ndcg)')
+```
+
+## Prediction
+
+This is the part where we are not sure if we did it correctly.
+
+```{r}
+predictions = predict(lambdamart_not_random, 
+                      test_sample, 
+                      n.trees = gbm.perf(lambdamart_not_random))
+
+summary(predictions)
+```
+
