@@ -1,0 +1,56 @@
+---
+title: "Project"
+output: html_document
+---
+
+```{r}
+library(tibble)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(glmnet)
+library(GGally)
+library(data.table)
+rm(list = ls())
+setwd("/Users/cnajmabadi/Documents/Winter 2017/MKTG 366/Project")
+data = read.csv("marchData.csv")
+na_fraction <- function(name) {
+  return(sum(data[[name]] == "NULL") / length(data[[name]]))
+}
+fraction <- matrix(nrow = 1, ncol = ncol(data))
+var_null_30 <- matrix(nrow = 1, ncol = ncol(data))
+colnames(fraction) <- colnames(data)
+for (i in 1:length(fraction)) {
+  fraction[1,i] = na_fraction(colnames(fraction)[i])
+  if (fraction[1,i] > .30) {
+    var_null_30[i] = colnames(fraction)[i]
+  }
+}
+data = data[, -which(names(data) %in% c("date_time", "visitor_hist_starrating",   "visitor_hist_adr_usd" ,     "srch_query_affinity_score" , "orig_destination_distance" , "comp1_rate"  ,              "comp1_inv"  ,     "comp1_rate_percent_diff" ,  "comp2_rate"      ,          "comp2_inv"    , "comp2_rate_percent_diff"  , "comp3_rate" ,   "comp3_inv"     ,"comp3_rate_percent_diff"   ,"comp4_rate" ,               "comp4_inv" ,   "comp4_rate_percent_diff",   "comp5_rate",          "comp5_inv"    ,   "comp5_rate_percent_diff" ,  "comp6_rate" ,    "comp6_inv", "comp6_rate_percent_diff"  , "comp7_rate" ,               "comp7_inv"     ,   "comp7_rate_percent_diff" ,  "comp8_rate" ,    "comp8_inv"  ,"comp8_rate_percent_diff"  , "gross_bookings_usd", "prop_location_score2", "prop_review_score"))]
+
+data[is.na(data)] <- 0
+
+factor_variables = c("visitor_location_country_id", "prop_country_id", "srch_destination_id", "site_id", "prop_id")
+
+log_variables = c("price_usd")
+
+for(i in 1:length(factor_variables)){
+  data[,i] = as.factor(data[,i])
+}
+
+for(i in 1:length(log_variables)){
+  data[,i] = log(data[,i])
+}
+train_ind = sample(1:nrow(data), .75*nrow(data))
+train <- data[train_ind,]
+test <- data[-train_ind,]
+
+View(train)
+co
+x = model.matrix(booking_bool~. -X - srch_id -date,train)
+lasso <- cv.glmnet(x, y = train[,23], alpha = 1)
+summary(lasso)
+```
+replace if more than 30% null 
+
+
