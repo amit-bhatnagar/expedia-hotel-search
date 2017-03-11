@@ -6,7 +6,7 @@ toc: true
 
 
 ```{r}
-setwd("~/Google Drive/School/MKTG 366 Project/")
+setwd("~/Google Drive/School/MKTG 366 Project/expedia-hotel-search/")
 library(data.table)
 library(caret)
 library(dplyr)
@@ -137,8 +137,6 @@ lambdamart_random = gbm(response ~ .,
               train.fraction = 0.5,
               verbose = FALSE)
 
-summary(lambdamart_not_random)
-summary(lambdamart_random)
 
 summary(
   lambdamart_not_random,
