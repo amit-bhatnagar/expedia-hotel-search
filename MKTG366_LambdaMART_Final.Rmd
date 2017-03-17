@@ -1,0 +1,191 @@
+---
+title: "MKTG 366 Project - LambdaMART"
+output: word_document
+toc: yes
+---
+
+
+```{r, echo=FALSE, results=FALSE, warning=FALSE}
+setwd("~/Google Drive/School/MKTG 366 Project/expedia-hotel-search/")
+library(data.table)
+library(caret)
+library(dplyr)
+library(gbm)
+```
+
+
+## Data preprocessing
+
+```{r, results=FALSE}
+# load data
+exped = data.table::fread("train.csv")
+# us_data = data.table::fread("train.csv")
+test_data = fread("../test.csv")
+```
+
+In the following we construct 3 variables: srch\_month, travel\_month, and int\_travel.
+```{r}
+exped$srch_month = factor(month(exped$date_time) )
+exped$travel_month = factor(month(as.Date(exped$date_time) + exped$srch_booking_window))
+exped$intl_travel = ifelse(exped$visitor_location_country_id != 219, 1, 0)
+```
+
+
+The following shows the glimps of the data and helps us decide what pre-processing operations to take.
+
+```{r, warning=FALSE}
+str(data_us)
+```
+
+
+We remove the following variables:
+
+- visitor\_hist_staring, visitor\_hist\_adr\_usd, srch\_query\_affinity\_score, gross\_bookings\_usd, since for the majority of observations they are NULL
+- all comp\_ variables, since they are mostly NULL and it has been observed that these variables do not have significant impact on booking
+- prop\_country\_id, since it's 219 for all examples
+- srch\_destination\_id, since it has too many levels for gbm to handle (max 1024 levels)
+
+```{r, warning=FALSE}
+data_us = exped %>% select(click_bool, random_bool, booking_bool, prop_brand_bool,
+                             srch_id, site_id, visitor_location_country_id, #prop_id,
+                             prop_starrating, prop_review_score, prop_location_score1, prop_location_score2,
+                             prop_log_historical_price, price_usd, #position,
+                             srch_length_of_stay, srch_booking_window, orig_destination_distance,
+                             srch_adults_count, srch_children_count, srch_room_count,
+                             srch_month, travel_month, intl_travel)
+```
+
+Of the variables selected, we convert:
+
+- all \_bool variables and all \_id (except srch\_id) variables to "factor"
+- prop\_review_score, prop\_location\_score2, orig\_destination_distance from "chr" to "numeric"
+
+```{r, warning=FALSE}
+# convert variables that were coerced to "character" to type "numeric"
+numeric_names = c("prop_review_score", "prop_location_score2", "orig_destination_distance")
+setDT(data_us)[, (numeric_names) := lapply(.SD, as.numeric), .SDcols = numeric_names]
+
+# convert these variables to type "factor"
+bool_names = c("click_bool", "prop_brand_bool", "booking_bool", "random_bool")
+id_names = c("site_id", "visitor_location_country_id")
+setDT(data_us)[, (bool_names) := lapply(.SD, as.factor), .SDcols = bool_names]
+setDT(data_us)[, (id_names) := lapply(.SD, as.factor), .SDcols = id_names]
+```
+
+We create the response variable as a composition of variables **booking\_bool** and **click\_bool**. A booking is scored highest at 5, a click is scored at 1, and no action is scored 0. This captures the value of the corresponding action.
+
+```{r, warning=FALSE}
+data_us$response = ifelse(data_us$booking_bool == 1, 5, ifelse(data_us$click_bool == 1, 1, 0))
+data_us = data_us %>% select(c(-booking_bool, -click_bool))
+```
+
+
+Proportion of observations that are NA, for each variable:
+```{r, warning=FALSE}
+na.proportion = function(column){
+  return(sum(is.na(column)) / length(column))
+}
+
+t = lapply(data_us, na.proportion)
+t
+```
+So we are fine.
+
+
+Similar processing is performed on the test set
+
+
+```{r}
+test_data$srch_month = factor(month(test_data$date_time) )
+test_data$travel_month = factor(month(as.Date(test_data$date_time) + test_data$srch_booking_window))
+test_data$intl_travel = ifelse(test_data$visitor_location_country_id != 219, 1, 0)
+```
+
+```{r}
+test_clean = test_data %>% select(prop_brand_bool,
+                                   srch_id, site_id, visitor_location_country_id, prop_id,
+                             prop_starrating, prop_review_score, prop_location_score1, prop_location_score2,
+                             prop_log_historical_price, price_usd,
+                             srch_length_of_stay, srch_booking_window, orig_destination_distance,
+                             srch_adults_count, srch_children_count, srch_room_count,
+                             srch_month, travel_month, intl_travel)
+```
+
+```{r}
+numeric_names = c("prop_review_score", "prop_location_score2", "orig_destination_distance")
+setDT(test_clean)[, (numeric_names) := lapply(.SD, as.numeric), .SDcols = numeric_names]
+
+# convert these variables to type "factor"
+id_names = c("site_id", "visitor_location_country_id")
+setDT(test_clean)[, (id_names) := lapply(.SD, as.factor), .SDcols = id_names]
+```
+
+
+## Modeling
+
+In the following we run a tree ensemble modeling using LambdaMART algorithm to learn to rank hotel results in response to a query.
+
+We train on the full dataset, but only on results that were sorted by relevance by Expedia (i.e. ```random\_bool == 0```).
+
+
+```{r}
+train_not_random = data_us %>% filter(random_bool == 0) %>% select(-random_bool)
+
+lambdamart_not_random1000 = gbm(response ~ .,
+              data = train_not_random,
+              distribution = list(name = 'pairwise', metric = "ndcg", group = 'srch_id'),
+              n.trees = 1000,
+              interaction.depth = 4,
+              shrinkage = 0.005,
+              train.fraction = 0.5,
+              verbose = TRUE)
+
+summary(
+  lambdamart_not_random,
+  n.trees = gbm.perf(lambdamart_not_random),
+  main = 'pairwise (ndcg)'
+  )
+
+```
+
+Variable importance for the most part match the exploratory conclusions we’ve reached earlier. For instance, position of a hotel in the ranking  is the most influential on whether that hotel is clicked or booked.
+
+
+## Making prediction
+
+Step 1: use ```type = 'response'``` to get predicted probabilities of the results.
+```{r, warning=FALSE}
+predictions = predict(lambdamart_not_random,
+                      test_clean,
+                      type = 'response',
+                      n.trees = gbm.perf(lambdamart_not_random))
+```
+
+Step 2: Combine search id, predicted probabilities, and property id in one data frame
+```{r}
+preds = data.frame(cbind(test_clean$srch_id, predictions, test_clean$prop_id))
+colnames(preds) = c("srch_id", "predicted_prob", "prop_id")
+```
+
+Step3: Order the results first by srch_id in ascending order, then by predicted probability in descending order (for each search id)
+
+Use DATA.TABLE's setorder takes less than 2 seconds. Other operations using dplyr or core R will take several hours.
+```{r}
+ranked_results_2 = setorder(setDT(preds), srch_id, -predicted_prob)
+```
+
+
+
+## Writing predictions to file
+
+```{r}
+output_to_save = ranked_results_2 %>% select(srch_id, prop_id)
+colnames(output_to_save) = c("SearchId", "PropertyId")
+write.csv(output_to_save, "submission.csv", sep = ",", row.names = FALSE)
+```
+
+In terminal, type the following to correct the header (there should not be quotes around the column names):
+
+```sed -i -e "1d" submission.csv```
+
+```sed -i 1i"SearchId,PropertyId" submission.csv```
