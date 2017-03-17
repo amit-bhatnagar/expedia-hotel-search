@@ -21,22 +21,29 @@ library(ggplot2)
 US_Data = data.table::fread("../Data/US_data.csv")
 
 attach(US_Data)
-US_Data$prop_location_score2 <- as.numeric(prop_location_score2)
-US_Data$prop_location_score1 <- as.numeric(prop_location_score1)
-US_Data$prop_review_score <- as.numeric(prop_review_score)
+
+#Focusing only on non random data
+US_Data <- US_Data [random_bool == 0]
+US_Data <- US_Data [position <= 10]
+  
+  
+US_Data$prop_location_score2 <- as.numeric(US_Data$prop_location_score2)
+US_Data$prop_location_score1 <- as.numeric(US_Data$prop_location_score1)
+US_Data$prop_review_score <- as.numeric(US_Data$prop_review_score)
 
 US_Data$srch_month <- factor(month(US_Data$date_time))
-US_Data$travel_month <- factor(month(as.Date(date_time) + srch_booking_window))
-US_Data$intl_travel <- ifelse(visitor_location_country_id!= 219,1,0)
+US_Data$travel_month <- factor(month(as.Date(US_Data$date_time) + US_Data$srch_booking_window))
+US_Data$intl_travel <- ifelse(US_Data$visitor_location_country_id!= 219,1,0)
 
-summary(lm(price_usd~factor(prop_review_score)
-           # + srch_children_count+srch_adults_count
+summary(lm(log(price_usd)~factor(prop_review_score)
+            + srch_children_count+srch_adults_count + srch_room_count
            +promotion_flag + factor(prop_starrating) + prop_brand_bool
            + prop_location_score1
            + prop_location_score2
             + srch_saturday_night_bool 
             +  travel_month +    srch_month + srch_booking_window 
-           + 
+           +intl_travel + position 
+           
           , data = US_Data))
 
 summary(lm(price_usd~srch_booking_window, data = US_Data))
